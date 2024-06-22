@@ -381,6 +381,91 @@ ms_tearfree_dri_flip(modesettingPtr ms, xf86CrtcPtr crtc, void *event,
     return TRUE;
 }
 
+void
+ms_do_pageflip_handle(ScreenPtr screen,
+                      ScrnInfoPtr scrn,
+                      modesettingPtr ms,
+                      xf86CrtcConfigPtr config,
+                      xf86CrtcPtr ref_crtc,
+                      Bool async,
+                      Bool async_fallback,
+                      int i,
+                      uint32_t flags,
+                      const char *log_prefix,
+                      struct ms_flipdata *flipdata)
+{
+        enum queue_flip_status flip_status;
+        xf86CrtcPtr crtc = config->crtc[i];
+
+        if (!xf86_crtc_on(crtc))
+            return;
+
+        flags = DRM_MODE_PAGE_FLIP_EVENT;
+        if (ms->drmmode.can_async_flip && async && !async_fallback)
+            flags |= DRM_MODE_PAGE_FLIP_ASYNC;
+
+        /*
+         * If this is not the reference crtc used for flip timing and flip event
+         * delivery and timestamping, ie. not the one whose presentation timing
+         * we do really care about, and async flips are possible, and requested
+         * by an xorg.conf option, then we flip this "secondary" crtc without
+         * sync to vblank. This may cause tearing on such "secondary" outputs,
+         * but it will prevent throttling of multi-display flips to the refresh
+         * cycle of any of the secondary crtcs, avoiding periodic slowdowns and
+         * judder caused by unsynchronized outputs. This is especially useful for
+         * outputs in a "clone-mode" or "mirror-mode" configuration.
+         */
+        if (ms->drmmode.can_async_flip && ms->drmmode.async_flip_secondaries &&
+            ref_crtc && crtc != ref_crtc && !async_fallback)
+            flags |= DRM_MODE_PAGE_FLIP_ASYNC;
+
+        flip_status = queue_flip_on_crtc(screen, crtc, flipdata,
+                                         ref_crtc, flags);
+
+        switch (flip_status) {
+            case QUEUE_FLIP_ALLOC_FAILED:
+                xf86DrvMsg(scrn->scrnIndex, X_WARNING,
+                           "%s: carrier alloc for queue flip on CRTC %d failed.\n",
+                           log_prefix, i);
+                goto error_undo;
+            case QUEUE_FLIP_QUEUE_ALLOC_FAILED:
+                xf86DrvMsg(scrn->scrnIndex, X_WARNING,
+                           "%s: entry alloc for queue flip on CRTC %d failed.\n",
+                           log_prefix, i);
+                goto error_undo;
+            case QUEUE_FLIP_DRM_FLUSH_FAILED: {
+                if (ms->drmmode.pageflip_fallback && (flags & DRM_MODE_PAGE_FLIP_ASYNC) && !async_fallback) {
+                    /*
+                     * It is very likely that the driver (presumably i915) didn't like the asynchronous page flip and threw a EINVAL.
+                     *
+                     * At this point we are left with two options:
+                     * - Discard the pageflip, freezing the screen as a consequence.
+                     * - Attempt a synchronous pageflip, locking us to vertical blanking.
+                     *
+                     * In my opinion, I rather not have my system seem to lock up out of nowhere.
+                     */
+                    ms_do_pageflip_handle(screen, scrn, ms, config, ref_crtc, async, TRUE, i, 0, log_prefix, flipdata);
+                } else {
+                    ms_print_pageflip_error(scrn->scrnIndex, log_prefix, i, flags, errno);
+                }
+                goto error_undo;
+            }
+            case QUEUE_FLIP_SUCCESS:
+                break;
+        }
+error_undo:
+
+    /*
+     * Have we just got the local reference?
+     * free the framebuffer if so since nobody successfully
+     * submitted anything
+     */
+    if (flipdata->flip_count == 1) {
+        drmModeRmFB(ms->fd, ms->drmmode.fb_id);
+        ms->drmmode.fb_id = flipdata->old_fb_id;
+    }
+}
+
 Bool
 ms_do_pageflip(ScreenPtr screen,
                PixmapPtr new_front,
@@ -477,51 +562,7 @@ ms_do_pageflip(ScreenPtr screen,
      * may never complete; this is a configuration error.
      */
     for (i = 0; i < config->num_crtc; i++) {
-        enum queue_flip_status flip_status;
-        xf86CrtcPtr crtc = config->crtc[i];
-
-        if (!xf86_crtc_on(crtc))
-            continue;
-
-        flags = DRM_MODE_PAGE_FLIP_EVENT;
-        if (ms->drmmode.can_async_flip && async)
-            flags |= DRM_MODE_PAGE_FLIP_ASYNC;
-
-        /*
-         * If this is not the reference crtc used for flip timing and flip event
-         * delivery and timestamping, ie. not the one whose presentation timing
-         * we do really care about, and async flips are possible, and requested
-         * by an xorg.conf option, then we flip this "secondary" crtc without
-         * sync to vblank. This may cause tearing on such "secondary" outputs,
-         * but it will prevent throttling of multi-display flips to the refresh
-         * cycle of any of the secondary crtcs, avoiding periodic slowdowns and
-         * judder caused by unsynchronized outputs. This is especially useful for
-         * outputs in a "clone-mode" or "mirror-mode" configuration.
-         */
-        if (ms->drmmode.can_async_flip && ms->drmmode.async_flip_secondaries &&
-            ref_crtc && crtc != ref_crtc)
-            flags |= DRM_MODE_PAGE_FLIP_ASYNC;
-
-        flip_status = queue_flip_on_crtc(screen, crtc, flipdata,
-                                         ref_crtc, flags);
-
-        switch (flip_status) {
-            case QUEUE_FLIP_ALLOC_FAILED:
-                xf86DrvMsg(scrn->scrnIndex, X_WARNING,
-                           "%s: carrier alloc for queue flip on CRTC %d failed.\n",
-                           log_prefix, i);
-                goto error_undo;
-            case QUEUE_FLIP_QUEUE_ALLOC_FAILED:
-                xf86DrvMsg(scrn->scrnIndex, X_WARNING,
-                           "%s: entry alloc for queue flip on CRTC %d failed.\n",
-                           log_prefix, i);
-                goto error_undo;
-            case QUEUE_FLIP_DRM_FLUSH_FAILED:
-                ms_print_pageflip_error(scrn->scrnIndex, log_prefix, i, flags, errno);
-                goto error_undo;
-            case QUEUE_FLIP_SUCCESS:
-                break;
-        }
+        ms_do_pageflip_handle(screen, scrn, ms, config, ref_crtc, async, FALSE, i, flags, log_prefix, flipdata);
     }
 
     drmmode_bo_destroy(&ms->drmmode, &new_front_bo);
@@ -534,18 +575,6 @@ ms_do_pageflip(ScreenPtr screen,
     if (flipdata->flip_count > 1) {
         flipdata->flip_count--;
         return TRUE;
-    }
-
-error_undo:
-
-    /*
-     * Have we just got the local reference?
-     * free the framebuffer if so since nobody successfully
-     * submitted anything
-     */
-    if (flipdata->flip_count == 1) {
-        drmModeRmFB(ms->fd, ms->drmmode.fb_id);
-        ms->drmmode.fb_id = flipdata->old_fb_id;
     }
 
 error_out:

@@ -111,6 +111,7 @@ typedef struct {
     Bool shadow_enable2;
     /** Is Option "PageFlip" enabled? */
     Bool pageflip;
+    Bool pageflip_fallback;
     Bool force_24_32;
     void *shadow_fb;
     void *shadow_fb2;

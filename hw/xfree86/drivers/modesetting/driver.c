@@ -143,6 +143,7 @@ static const OptionInfoRec Options[] = {
     {OPTION_SHADOW_FB, "ShadowFB", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_ACCEL_METHOD, "AccelMethod", OPTV_STRING, {0}, FALSE},
     {OPTION_PAGEFLIP, "PageFlip", OPTV_BOOLEAN, {0}, FALSE},
+    {OPTION_PAGEFLIP_FALLBACK, "PageFlipFallback", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_ZAPHOD_HEADS, "ZaphodHeads", OPTV_STRING, {0}, FALSE},
     {OPTION_DOUBLE_SHADOW, "DoubleShadow", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_ATOMIC, "Atomic", OPTV_BOOLEAN, {0}, FALSE},
@@ -1392,8 +1393,9 @@ PreInit(ScrnInfoPtr pScrn, int flags)
         }
     }
 
-    ms->drmmode.pageflip =
-        xf86ReturnOptValBool(ms->drmmode.Options, OPTION_PAGEFLIP, TRUE);
+    ms->drmmode.pageflip_fallback = xf86ReturnOptValBool(ms->drmmode.Options, OPTION_PAGEFLIP_FALLBACK, FALSE);
+    xf86DrvMsg(pScrn->scrnIndex, X_INFO, "PageFlipFallback: %sabled\n",
+                       ms->drmmode.pageflip_fallback ? "en" : "dis");
 
     pScrn->capabilities = 0;
     ret = drmGetCap(ms->fd, DRM_CAP_PRIME, &value);

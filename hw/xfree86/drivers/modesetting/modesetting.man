@@ -71,6 +71,16 @@ One of \*qglamor\*q or \*qnone\*q.  Default: glamor.
 Enable DRI3 page flipping.  The default is
 .B on.
 .TP
+.BI "Option \*qPageFlipFallback\*q \*q" boolean \*q
+Enables a fallback path for page flipping intended to solve a display freezing issue when an Intel GPU is used with PRIME.
+.br
+The fallback path
+.B WILL
+restrict your framerate to your monitor's refresh rate if this fallback path is hit.
+.br
+The default is
+.B off.
+.TP
 .BI "Option \*qVariableRefresh\*q \*q" boolean \*q
 Enables support for enabling variable refresh on the Screen's CRTCs
 when an suitable application is flipping via the Present extension.
